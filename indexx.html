@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Genetic Image Evolution</title>
+  <style>
+    body { font-family: sans-serif; display: flex; gap: 20px; margin: 20px; }
+    #left, #right { flex: 1; }
+    canvas { border: 1px solid #ccc; margin-bottom: 10px; }
+    #candidates { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+    #controls { margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div id="left">
+    <h3>Top Candidates</h3>
+    <div id="candidates"></div>
+    <div id="controls">
+      <input type="range" min="0" max="0" value="0" id="generationSlider">
+      <label>Generation: <span id="genLabel">0</span></label>
+      <button id="pauseBtn">Pause</button>
+    </div>
+  </div>
+  <div id="right">
+    <h3>Target Image</h3>
+    <input type="file" id="imgInput" accept="image/*"><br>
+    <canvas id="targetCanvas" width="100" height="100"></canvas>
+  </div>
+
+<script>
+const canvasSize = 100;
+const populationSize = 50;
+const topCount = 10;
+let generations = [];
+let currentGeneration = 0;
+let targetImageData = null;
+let isEvolving = true;
+
+class Individual {
+  constructor(data = null) {
+    this.canvas = document.createElement('canvas');
+    this.canvas.width = canvasSize;
+    this.canvas.height = canvasSize;
+    this.ctx = this.canvas.getContext('2d');
+    if (data) this.ctx.putImageData(data, 0, 0);
+    else this.randomize();
+  }
+
+  randomize() {
+    let imageData = this.ctx.createImageData(canvasSize, canvasSize);
+    for (let i = 0; i < imageData.data.length; i += 4) {
+      imageData.data[i] = Math.floor(Math.random() * 256);
+      imageData.data[i + 1] = Math.floor(Math.random() * 256);
+      imageData.data[i + 2] = Math.floor(Math.random() * 256);
+      imageData.data[i + 3] = 255;
+    }
+    this.ctx.putImageData(imageData, 0, 0);
+  }
+
+  fitness() {
+    if (!targetImageData) return -Infinity;
+    let data = this.ctx.getImageData(0, 0, canvasSize, canvasSize);
+    let diff = 0;
+    for (let i = 0; i < data.data.length; i += 4) {
+      diff += Math.abs(data.data[i] - targetImageData.data[i]) +
+              Math.abs(data.data[i + 1] - targetImageData.data[i + 1]) +
+              Math.abs(data.data[i + 2] - targetImageData.data[i + 2]);
+    }
+    return -diff;
+  }
+
+  getImageData() {
+    return this.ctx.getImageData(0, 0, canvasSize, canvasSize);
+  }
+}
+
+function evolve(population) {
+  population.sort((a, b) => b.fitness() - a.fitness());
+  const bestParents = population.slice(0, topCount);
+  const newPop = [];
+
+  // Elitism: carry forward the top 2 as-is
+  newPop.push(...bestParents.slice(0, 2));
+
+  for (let i = 2; i < populationSize; i++) {
+    const newData = bestParents[0].ctx.createImageData(canvasSize, canvasSize);
+
+    for (let j = 0; j < newData.data.length; j += 4) {
+      // Choose the best pixel from the top parents for each channel
+      let bestPixel = [0, 0, 0];
+      let bestScore = Infinity;
+      for (let p = 0; p < bestParents.length; p++) {
+        const pdata = bestParents[p].getImageData().data;
+        const r = pdata[j];
+        const g = pdata[j + 1];
+        const b = pdata[j + 2];
+        const score = Math.abs(r - targetImageData.data[j]) +
+                      Math.abs(g - targetImageData.data[j + 1]) +
+                      Math.abs(b - targetImageData.data[j + 2]);
+        if (score < bestScore) {
+          bestScore = score;
+          bestPixel = [r, g, b];
+        }
+      }
+      newData.data[j] = bestPixel[0];
+      newData.data[j + 1] = bestPixel[1];
+      newData.data[j + 2] = bestPixel[2];
+      newData.data[j + 3] = 255;
+    }
+    newPop.push(new Individual(newData));
+  }
+  return newPop;
+}
+
+function drawCandidates(genIndex) {
+  const container = document.getElementById('candidates');
+  container.innerHTML = '';
+  generations[genIndex].slice(0, topCount).forEach((ind) => {
+    const newCanvas = document.createElement('canvas');
+    newCanvas.width = canvasSize;
+    newCanvas.height = canvasSize;
+    newCanvas.getContext('2d').putImageData(ind.getImageData(), 0, 0);
+    container.appendChild(newCanvas);
+  });
+  const bestFitness = generations[genIndex][0].fitness();
+  document.getElementById('genLabel').textContent = `${genIndex} (Fitness: ${bestFitness.toFixed(2)})`;
+}
+
+function evolveLoop() {
+  if (!isEvolving) return;
+  const currentPop = generations[generations.length - 1];
+  const nextGen = evolve(currentPop);
+  generations.push(nextGen);
+  document.getElementById('generationSlider').max = generations.length - 1;
+  document.getElementById('generationSlider').value = generations.length - 1;
+  drawCandidates(generations.length - 1);
+  setTimeout(evolveLoop, 100);
+}
+
+const input = document.getElementById('imgInput');
+const targetCanvas = document.getElementById('targetCanvas');
+const targetCtx = targetCanvas.getContext('2d');
+input.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function (event) {
+    const img = new Image();
+    img.onload = function () {
+      targetCtx.clearRect(0, 0, canvasSize, canvasSize);
+      targetCtx.drawImage(img, 0, 0, canvasSize, canvasSize);
+      targetImageData = targetCtx.getImageData(0, 0, canvasSize, canvasSize);
+      startEvolution();
+    };
+    img.src = event.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+function startEvolution() {
+  generations.length = 0;
+  const initialPop = Array.from({ length: populationSize }, () => new Individual());
+  generations.push(initialPop);
+  document.getElementById('generationSlider').max = 0;
+  document.getElementById('generationSlider').value = 0;
+  document.getElementById('genLabel').textContent = '0';
+  drawCandidates(0);
+  isEvolving = true;
+  document.getElementById('pauseBtn').textContent = 'Pause';
+  evolveLoop();
+}
+
+document.getElementById('generationSlider').addEventListener('input', (e) => {
+  currentGeneration = +e.target.value;
+  drawCandidates(currentGeneration);
+});
+
+document.getElementById('pauseBtn').addEventListener('click', () => {
+  isEvolving = !isEvolving;
+  document.getElementById('pauseBtn').textContent = isEvolving ? 'Pause' : 'Resume';
+  if (isEvolving) evolveLoop();
+});
+</script>
+</body>
+</html>
